@@ -10,32 +10,6 @@ config = configparser.ConfigParser()
 config.read("../config.ini")
 
 
-def get_split(my_len, seed=42):
-    """ split a given number of samples reproducibly into training, validation and test
-
-    Args:
-        my_len (int]): number of samples to split
-        seed (int, optional): [description]. Defaults to 42.
-
-    Returns:
-        [type]: tuple of indexes to allocate reproducibly to 
-    """
-
-    split_idxs = np.arange(my_len)
-    np.random.seed(seed)
-    np.random.shuffle(split_idxs)
-
-    num_train, num_val, = (
-        int(my_len * 0.5),
-        int(my_len * 0.25),
-    )
-    num_test = my_len - num_train - num_val
-    train_idxs = split_idxs[:num_train]
-    val_idxs = split_idxs[num_train:num_train + num_val]
-    test_idxs = split_idxs[-num_test:]
-    return train_idxs, val_idxs, test_idxs
-
-
 def get_qefficiency(battery, cycle):
     """for a given battery data and cycle, calculate the coloumbic efficiency
 
@@ -57,9 +31,7 @@ def get_qefficiency(battery, cycle):
 
 
 def get_mean_voltage_difference(battery, cycle):
-    """calculate overpotential for a given battery and cycle
-
-    """
+    """calculate overpotential for a given battery and cycle"""
     cv_curve, _ = get_capacity_curve(battery, cycle, is_discharge=False)
     dv_curve, dq_curve = get_capacity_curve(battery, cycle, is_discharge=True)
     # print(dv_curve.max())
@@ -73,9 +45,7 @@ def get_mean_voltage_difference(battery, cycle):
 
 
 def get_mean_voltage(battery, cycle, use_discharge=False):
-    """calculate overpotential for a given battery and cycle
-
-    """
+    """calculate overpotential for a given battery and cycle"""
     cv_curve, _ = get_capacity_curve(battery, cycle, is_discharge=False)
     dv_curve, _ = get_capacity_curve(battery, cycle, is_discharge=True)
 
@@ -87,7 +57,7 @@ def get_mean_voltage(battery, cycle, use_discharge=False):
 
 
 def get_capacity_curve(cell, cycle, is_discharge):
-    """used to calculate the variance between two cycels, simply returns the relevant parts (ie discharging) of the v and q curve"""
+    """calculate the variance between two cycels, returns relevant parts (ie discharging) of the v and q curve"""
 
     v_curve = cell["cycles"][str(cycle)]["V"]
     qc_curve = cell["cycles"][str(cycle)]["Qc"]
@@ -116,29 +86,6 @@ def get_capacity_curve(cell, cycle, is_discharge):
     return (v_curve[start:stop], q_curve[start:stop])
 
 
-def smooth_x(
-    x,
-    y,
-    num_points=10,
-):
-    """Smoothes input for training by averaging over the num_points points.
-
-    Args:
-        x Numpy Array: Capacity curves for all batteries
-        y ([type]): 1D array indicating the lif
-        num_points (int, optional): number of points over which to average. Defaults to 10.
-
-    Returns:
-        Numpy Array: [description]
-    """
-    x_smoothed = x.copy()
-
-    for i in range(len(x)):
-        x_smoothed[i, num_points // 2:-num_points // 2 + 1] = np.convolve(
-            x[i], np.ones((num_points)) / num_points, mode="valid")
-    return x_smoothed
-
-
 def get_capacity_spline(cell, cycle):
     """
     splines the voltage capacity curve
@@ -150,19 +97,6 @@ def get_capacity_spline(cell, cycle):
     spline = f(points)
     spline[np.where(np.isnan(spline))] = 0
     return spline
-
-
-def scale_x(x, y):
-    max_val = 1.1  # nominal capacity for the Severson paper
-    end_of_life_val = (
-        0.8 * 1.1
-    )  # batteries are considered dead after 80%. This should be .8*1.1
-    x = np.minimum(x, max_val)
-    x = np.maximum(x, end_of_life_val)
-
-    x = (x - end_of_life_val) / (max_val - end_of_life_val)
-
-    return x
 
 
 def remove_outliers(x_in, y):
@@ -205,19 +139,22 @@ def load_data_single(data_path):
         batch1[bk]["cycle_life"] = batch1[bk]["cycle_life"] + add_len[i]
         for j in batch1[bk]["summary"].keys():
             if j == "cycle":
-                batch1[bk]["summary"][j] = np.hstack((
-                    batch1[bk]["summary"][j],
-                    batch2[batch2_keys[i]]["summary"][j] +
-                    len(batch1[bk]["summary"][j]),
-                ))
+                batch1[bk]["summary"][j] = np.hstack(
+                    (
+                        batch1[bk]["summary"][j],
+                        batch2[batch2_keys[i]]["summary"][j]
+                        + len(batch1[bk]["summary"][j]),
+                    )
+                )
             else:
                 batch1[bk]["summary"][j] = np.hstack(
-                    (batch1[bk]["summary"][j],
-                     batch2[batch2_keys[i]]["summary"][j]))
+                    (batch1[bk]["summary"][j], batch2[batch2_keys[i]]["summary"][j])
+                )
         last_cycle = len(batch1[bk]["cycles"].keys())
         for j, jk in enumerate(batch2[batch2_keys[i]]["cycles"].keys()):
-            batch1[bk]["cycles"][str(last_cycle +
-                                     j)] = batch2[batch2_keys[i]]["cycles"][jk]
+            batch1[bk]["cycles"][str(last_cycle + j)] = batch2[batch2_keys[i]][
+                "cycles"
+            ][jk]
     del batch2["b2c7"]
     del batch2["b2c8"]
     del batch2["b2c9"]
@@ -249,76 +186,15 @@ def get_max_life_time(data_dict):
 
     max_lifetime = 0
     for bat in data_dict.keys():
-        max_lifetime = np.maximum(max_lifetime,
-                                  data_dict[bat]["cycle_life"][0][0])
+        max_lifetime = np.maximum(max_lifetime, data_dict[bat]["cycle_life"][0][0])
     return int(max_lifetime)
 
 
-def transform_charging(c):
-    num_steps = 9
-    stop_val = 0.8
-    long_c = np.zeros((len(c), num_steps))
-    for i in range(num_steps):
-        use_first = c[:, -1] > i / num_steps * stop_val
-        long_c[:, i] = c[:, 0] * use_first + c[:, 2] * (1 - use_first)
-    return long_c
-
-
-def get_elis_data(
-    data_dict,
-    num_offset=0,
-):
-
-    max_lifetime = get_max_life_time(data_dict) - num_offset
-    num_bats = len(data_dict)
-    coloumbic_eff = -1 * np.ones((num_bats, max_lifetime))
-    list_of_keys = []
-
-    x = -1 * np.ones((num_bats, max_lifetime))
-    charge_policy = np.zeros((num_bats, 4))
-
-    y = np.zeros(num_bats)
-    err_id = 0
-    for i, bat in enumerate(data_dict.keys()):
-        list_of_keys.append(bat)
-        first, switch_time, second = get_charge_policy(
-            data_dict[bat]["charge_policy"])
-
-        switch_time /= 100
-
-        avg = first * (switch_time / 0.8) + second * (
-            1 - switch_time / 0.8)  # batteries charged from .0 until .8 SOC
-        charge_policy[i] = first, avg, second, switch_time
-        for j in range(0, len(data_dict[bat]["summary"]["QC"]) - num_offset):
-            bat_val = data_dict[bat]
-
-            try:
-                coloumbic_eff[i, j] = get_qefficiency(bat_val, j)[2]
-            except ValueError:
-                err_id += 1
-
-            pass
-
-        x[i, :len(data_dict[bat]["summary"]["QC"]) -
-          num_offset] = data_dict[bat]["summary"]["QC"][num_offset:]
-        y[i] = data_dict[bat]["cycle_life"]
-    print(err_id)
-    y = y.astype(np.int32)
-    x[:41, :-1] = x[:41, 1:]
-
-    return x, y, coloumbic_eff, list_of_keys, charge_policy
-
-
-def get_poul_data(
+def get_data(
     data_dict,
     ref_val,
     num_offset=0,
 ):
-    """
-    for the meeting with Poul and subsequent notebook creation on aged data. Not needed for anything else
-
-
-    """
 
     max_lifetime = get_max_life_time(data_dict) - num_offset
     num_bats = len(data_dict)
@@ -336,115 +212,50 @@ def get_poul_data(
     err_id = 0
     for i, bat in enumerate(data_dict.keys()):
         list_of_keys.append(bat)
-        first, switch_time, second = get_charge_policy(
-            data_dict[bat]["charge_policy"])
+        first, switch_time, second = get_charge_policy(data_dict[bat]["charge_policy"])
 
         switch_time /= 100
 
         avg = first * (switch_time / 0.8) + second * (
-            1 - switch_time / 0.8)  # batteries charged from .0 until .8 SOC
+            1 - switch_time / 0.8
+        )  # batteries charged from .0 until .8 SOC
         charge_policy[i] = first, avg, second, switch_time
         for j in range(0, len(data_dict[bat]["summary"]["QC"]) - num_offset):
             bat_val = data_dict[bat]
 
             try:
                 coloumbic_eff[i, j] = get_qefficiency(bat_val, j)[2]
-                overpotential_charge[i, j] = get_mean_voltage(bat_val, j, use_discharge = False) -ref_val
-                
-                overpotential_discharge[i, j] = get_mean_voltage(bat_val, j, use_discharge = True) -ref_val
+                overpotential_charge[i, j] = (
+                    get_mean_voltage(bat_val, j, use_discharge=False) - ref_val
+                )
+
+                overpotential_discharge[i, j] = (
+                    get_mean_voltage(bat_val, j, use_discharge=True) - ref_val
+                )
 
             except ValueError:
                 err_id += 1
 
             pass
 
-        x[i, :len(data_dict[bat]["summary"]["QC"]) -
-          num_offset] = data_dict[bat]["summary"]["QC"][num_offset:]
-        x_discharge[i, :len(data_dict[bat]["summary"]["QC"]) -
-                    num_offset] = data_dict[bat]["summary"]["QD"][num_offset:]
+        x[i, : len(data_dict[bat]["summary"]["QC"]) - num_offset] = data_dict[bat][
+            "summary"
+        ]["QC"][num_offset:]
+        x_discharge[i, : len(data_dict[bat]["summary"]["QC"]) - num_offset] = data_dict[
+            bat
+        ]["summary"]["QD"][num_offset:]
         y[i] = data_dict[bat]["cycle_life"]
     print(err_id)
     y = y.astype(np.int32)
     x[:41, :-1] = x[:41, 1:]
 
-    return x, y, coloumbic_eff, list_of_keys, charge_policy, x_discharge, overpotential_charge, overpotential_discharge
-
-
-def get_capacity_input(data_dict,
-                       num_offset=0,
-                       start_cycle=10,
-                       stop_cycle=100,
-                       use_long_cschedule=False):
-    for key in data_dict.keys():
-        bat = data_dict[key]
-
-        start_curve = get_capacity_spline(
-            bat,
-            start_cycle,
-        )
-        stop_curve = get_capacity_spline(
-            bat,
-            stop_cycle,
-        )
-        idxs = np.where(
-            1 - (np.isnan(start_curve) + np.isnan(stop_curve))
-        )  # the first parts of the cycle don't get modelled well. Ignored because tiny part
-        bat["qv_variance"] = np.log(
-            (start_curve[idxs] - stop_curve[idxs]).var())
-        bat["c_efficiency"] = (get_qefficiency(bat, stop_cycle)[2] -
-                               get_qefficiency(bat, start_cycle)[2])
-        bat["v_delta"] = get_mean_voltage_difference(
-            bat, stop_cycle) - get_mean_voltage_difference(
-                bat, start_cycle)  # always use the fifth cycle
-
-    max_lifetime = get_max_life_time(data_dict) - num_offset
-
-    num_bats = len(data_dict)
-    x = -1 * np.ones((num_bats, max_lifetime))
-    charge_policy = np.zeros((num_bats, 4))
-    in_cycle_data = np.zeros((num_bats, 3))
-
-    y = np.zeros(num_bats)
-    for i, bat in enumerate(data_dict.keys()):
-        x[i, :len(data_dict[bat]["summary"]["QC"]) -
-          num_offset] = data_dict[bat]["summary"]["QC"][num_offset:]
-        y[i] = data_dict[bat]["cycle_life"]
-        first, switch_time, second = get_charge_policy(
-            data_dict[bat]["charge_policy"])
-
-        switch_time /= 100
-
-        avg = first * (switch_time / 0.8) + second * (
-            1 - switch_time / 0.8)  # batteries charged from .0 until .8 SOC
-        charge_policy[i] = first, avg, second, switch_time
-        in_cycle_data[i, 0] = data_dict[bat]["qv_variance"]
-        in_cycle_data[i, 1] = data_dict[bat]["c_efficiency"]
-        in_cycle_data[i, 2] = data_dict[bat]["v_delta"]
-    y = y.astype(np.int32)
-    x[:41, :
-      -1] = x[:41,
-              1:]  #  in severson data the first batch starts with 0, likely a bug
-    if use_long_cschedule:
-        return x, y, charge_policy, in_cycle_data
-
-    return x, y, charge_policy[:, :3], in_cycle_data
-
-
-def assemble_dataset(x, y, augment, seq_len=50, use_cycle_counter=True):
-
-    xs = []
-    ys = []
-    add_data_s = []
-    for i in range(len(x)):
-        for j in range(y[i] - seq_len - 3):
-
-            xs.append(x[i, j:j + seq_len])
-
-            ratio = x[i, j + seq_len] / (x[i, j + seq_len - 1] + 10e-17)
-
-            ys.append((ratio, (y[i] - seq_len - j)))
-            if use_cycle_counter:
-                add_data_s.append(np.hstack([augment[i], np.log(j + seq_len)]))
-            else:
-                add_data_s.append(augment[i])
-    return np.asarray(xs)[:, :, None], np.asarray(ys), np.asarray(add_data_s)
+    return (
+        x,
+        y,
+        coloumbic_eff,
+        list_of_keys,
+        charge_policy,
+        x_discharge,
+        overpotential_charge,
+        overpotential_discharge,
+    )
