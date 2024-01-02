@@ -174,6 +174,7 @@ def load_data_single(data_path):
 
 
 def get_charge_policy(my_string):
+    # print(my_string)
 
     # charge policy extract from string
     vals = [
